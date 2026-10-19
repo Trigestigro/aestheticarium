@@ -54,6 +54,9 @@ input[type=color] { width: 100%; height: 40px; padding: 0; border: 1px solid var
 .alca { position: absolute; top: 50%; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%; border: 3px solid var(--card); box-shadow: 0 0 0 1px var(--fg); touch-action: none; }
 .alca.sel { box-shadow: 0 0 0 3px var(--acento); }
 .barra input[type=color] { flex: 1; }
+#instalados { margin-bottom: 10px; font-size: .9rem; }
+.inst { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.inst span { flex: 1; }
 </style>
 </head>
 <body>
@@ -63,6 +66,7 @@ input[type=color] { width: 100%; height: 40px; padding: 0; border: 1px solid var
   <p>Protótipo do núcleo, dos plugins e do dither</p>
 </header>
 <nav id="menu"></nav>
+<div id="instalados"></div>
 <div class="barra">
   <label class="botao" for="campoImagem">Abrir imagem</label>
   <label class="botao" for="campoPlugin">Escolher plugin</label>
@@ -93,6 +97,7 @@ const estado = {
   abertos: {}       // seções recolhíveis do painel: quais estão abertas
 };
 const tela = document.getElementById("tela");
+let origemAtual = null;   // nome do arquivo do plugin que está sendo carregado agora (vazio para os plugins embutidos)
 const dizer = (texto) => { document.getElementById("status").textContent = texto; }; // mostra uma mensagem
 
 // ================= 2. CARREGADOR DE PLUGINS (ticket 2) =================
@@ -104,9 +109,9 @@ function registrarPlugin(p) {
       throw new Error("plugin incompleto: faltam id ou processar");
     if (p.api !== VERSAO_API)
       throw new Error("usa a API " + p.api + ", mas o app usa a " + VERSAO_API);
-    estado.itens.push({ plugin: p, erro: null });
+    estado.itens.push({ plugin: p, erro: null, origem: origemAtual });
   } catch (e) {
-    estado.itens.push({ plugin: { id: "erro" + estado.itens.length, nome: (p && p.nome) || "Plugin sem nome" }, erro: e.message });
+    estado.itens.push({ plugin: { id: "erro" + estado.itens.length, nome: (p && p.nome) || "Plugin sem nome" }, erro: e.message, origem: origemAtual });
   }
   desenharMenu();
 }
@@ -127,6 +132,7 @@ function desenharMenu() {
     }
     menu.appendChild(b);
   }
+  desenharInstalados();
 }
 
 // Escolhe um plugin: guarda os valores iniciais dos controles e mostra o painel.
@@ -393,19 +399,76 @@ async function exportar() {
   }
 }
 
-// Carrega um plugin de um arquivo .js escolhido pelo usuário.
-// O arquivo recebe o objeto "aestheticarium" e chama aestheticarium.registrarPlugin(...).
+// ================= PLUGINS GUARDADOS NO APARELHO (ticket 9) =================
+// O código de cada plugin carregado de arquivo fica guardado no aparelho (localStorage) e é
+// executado de novo toda vez que o app abre. Cada item guardado é { nome: "arquivo.js", codigo: "..." }.
+const CHAVE = "aestheticarium.plugins";
+function lerSalvos() {
+  try { return JSON.parse(localStorage.getItem(CHAVE)) || []; } catch (e) { return []; }
+}
+function gravarSalvos(lista) {
+  try { localStorage.setItem(CHAVE, JSON.stringify(lista)); }
+  catch (e) { dizer("Não foi possível guardar o plugin neste aparelho."); }
+}
+
+// Executa o código de um plugin. Se o código tiver erro, o plugin aparece desativado no menu.
+function executarPlugin(nome, codigo) {
+  origemAtual = nome;                                   // registrarPlugin anota de qual arquivo veio
+  try {
+    new Function("aestheticarium", codigo)({ registrarPlugin });
+  } catch (e) {
+    estado.itens.push({ plugin: { id: "erro" + estado.itens.length, nome }, erro: e.message, origem: nome });
+  }
+  origemAtual = null;
+  desenharMenu();
+}
+
+// Remove da tela (e do menu) todos os plugins que vieram de um arquivo.
+function tirarDoMenu(nome) {
+  if (estado.ativo && estado.ativo.origem === nome) {
+    estado.ativo = null;
+    document.getElementById("painel").innerHTML = "";
+    agendar();                                          // volta a mostrar a imagem original
+  }
+  estado.itens = estado.itens.filter((i) => i.origem !== nome);
+}
+
+// Carrega um plugin de um arquivo .js escolhido pelo usuário e o guarda no aparelho.
 function carregarPlugin(arquivo) {
   const leitor = new FileReader();
   leitor.onload = () => {
-    try {
-      new Function("aestheticarium", leitor.result)({ registrarPlugin });
-      dizer("Plugin carregado: " + arquivo.name);
-    } catch (e) {
-      dizer("Não foi possível carregar " + arquivo.name + ": " + e.message + " (este ambiente pode bloquear plugins de arquivo).");
-    }
+    tirarDoMenu(arquivo.name);                          // se já existia um com esse nome, é substituído
+    executarPlugin(arquivo.name, leitor.result);
+    gravarSalvos(lerSalvos().filter((s) => s.nome !== arquivo.name).concat({ nome: arquivo.name, codigo: leitor.result }));
+    dizer("Plugin carregado e guardado: " + arquivo.name);
   };
   leitor.readAsText(arquivo);
+}
+
+// Apaga um plugin do aparelho. Os plugins que já vêm no app não têm este botão.
+function removerPlugin(nome) {
+  tirarDoMenu(nome);
+  gravarSalvos(lerSalvos().filter((s) => s.nome !== nome));
+  desenharMenu();
+  dizer("Plugin removido: " + nome);
+}
+
+// Lista os plugins adicionados por arquivo, cada um com seu botão Remover.
+function desenharInstalados() {
+  const caixa = document.getElementById("instalados");
+  caixa.innerHTML = "";
+  const nomes = [...new Set(estado.itens.filter((i) => i.origem).map((i) => i.origem))];
+  for (const nome of nomes) {
+    const linha = document.createElement("div");
+    linha.className = "inst";
+    const texto = document.createElement("span");
+    texto.textContent = nome;
+    const b = document.createElement("button");
+    b.textContent = "Remover";
+    b.onclick = () => removerPlugin(nome);
+    linha.append(texto, b);
+    caixa.appendChild(linha);
+  }
 }
 
 // Quando o usuário escolhe um arquivo, o campo avisa (onchange) e chamamos a função certa.
@@ -543,6 +606,7 @@ registrarPlugin({
 // Plugin de teste com versão de API errada: deve aparecer desativado no menu.
 registrarPlugin({ api: 99, id: "futuro", nome: "Plugin de teste", processar() {} });
 
+for (const guardado of lerSalvos()) executarPlugin(guardado.nome, guardado.codigo);   // plugins guardados no aparelho
 selecionar(estado.itens[0]);   // começa com o Dither ativo
 
 // PWA: registra o "service worker", o arquivo que guarda o app no aparelho para abrir sem internet.

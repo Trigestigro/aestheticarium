@@ -1,6 +1,6 @@
 // sw.js: "service worker" do aestheticarium. Ele guarda os arquivos do app no aparelho (cache)
 // para o app abrir mesmo sem internet. Ao mudar qualquer arquivo do app, troque o número da versão abaixo.
-const VERSAO = "aestheticarium-v1";
+const VERSAO = "aestheticarium-v2";
 const ARQUIVOS = ["./", "index.html", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 
 // Instalação: guarda todos os arquivos no cache.
