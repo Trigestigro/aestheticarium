@@ -1,0 +1,14 @@
+{
+  "name": "aestheticarium",
+  "short_name": "aestheticarium",
+  "description": "Ferramentas modulares de estética: dither, mapa de gradiente e mais.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#eceff4",
+  "theme_color": "#3a3fd1",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}

@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<!-- aestheticarium: protótipo (tickets 1 a 5). Arquivo único: estrutura (HTML), aparência (CSS) e comportamento (JavaScript). -->
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<!-- Faz a página se ajustar à tela do celular. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>aestheticarium</title>
+<!-- PWA: o manifesto diz ao celular como instalar o app (nome, ícone, cores). -->
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#3a3fd1">
+<link rel="icon" href="icon-192.png">
+<style>
+/* CORES: guardadas em variáveis (--nome) para trocar o visual em um lugar só. */
+:root {
+  --bg: #eceff4; --fg: #1a2033; --card: #ffffff; --borda: #c5cbd8; --acento: #3a3fd1; --acento-fg: #ffffff;
+  box-sizing: border-box;
+  padding-top: env(safe-area-inset-top, 0px);      /* respeita a barra do topo do celular */
+  padding-bottom: env(safe-area-inset-bottom, 0px); /* e a de baixo */
+}
+html { scroll-padding-top: env(safe-area-inset-top, 0px); }
+/* MODO ESCURO: se o aparelho estiver no escuro, trocamos as cores. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --bg: #12141d; --fg: #e5e8f2; --card: #1c202d; --borda: #2f3549; --acento: #8f93ff; --acento-fg: #12141d; }
+}
+:root[data-theme="dark"] { --bg: #12141d; --fg: #e5e8f2; --card: #1c202d; --borda: #2f3549; --acento: #8f93ff; --acento-fg: #12141d; }
+body { margin: 0; padding: 12px; background: var(--bg); color: var(--fg); font: 16px/1.4 "Trebuchet MS", system-ui, sans-serif; }
+h1 { margin: 0; font-size: 1.6rem; letter-spacing: -0.02em; }
+header p { margin: 2px 0 12px; opacity: .7; }
+/* Botões do menu e da barra: todos com o mesmo estilo. */
+button { font: inherit; padding: 8px 14px; border: 1px solid var(--borda); border-radius: 8px; background: var(--card); color: var(--fg); }
+button.ativo { background: var(--acento); color: var(--acento-fg); border-color: var(--acento); }
+button.desativado { opacity: .5; text-decoration: line-through; }
+/* .botao: um label com cara de botão. Tocar nele abre o seletor de arquivos direto, sem depender de JavaScript. */
+.botao { font: inherit; padding: 8px 14px; border: 1px solid var(--borda); border-radius: 8px; background: var(--card); color: var(--fg); cursor: pointer; }
+/* .oculto: esconde o campo de arquivo sem tirá-lo da página (alguns celulares ignoram campos com display none). */
+.oculto { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; }
+/* Barra de progresso da exportação. */
+progress { width: 100%; height: 10px; margin: 0 0 8px; accent-color: var(--acento); }
+#menu, .barra { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+#status { min-height: 1.4em; margin: 0 0 8px; font-size: .9rem; }
+/* canvas = a área onde a imagem aparece. max-width impede de sair da tela. */
+canvas { max-width: 100%; background: var(--card); border: 1px solid var(--borda); border-radius: 8px; }
+#painel { margin-top: 12px; padding: 12px; background: var(--card); border: 1px solid var(--borda); border-radius: 8px; }
+#painel:empty { display: none; }
+.linha { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.linha:last-child { margin-bottom: 0; }
+input[type=range], select { width: 100%; }
+select { font: inherit; padding: 6px; }
+details { margin-bottom: 10px; }
+summary { font-weight: bold; padding: 6px 0; cursor: pointer; }
+input[type=color] { width: 100%; height: 40px; padding: 0; border: 1px solid var(--borda); border-radius: 8px; background: var(--card); }
+.barra-grad { position: relative; height: 36px; margin: 14px 0 12px; border: 1px solid var(--borda); border-radius: 8px; touch-action: none; }
+.alca { position: absolute; top: 50%; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%; border: 3px solid var(--card); box-shadow: 0 0 0 1px var(--fg); touch-action: none; }
+.alca.sel { box-shadow: 0 0 0 3px var(--acento); }
+.barra input[type=color] { flex: 1; }
+</style>
+</head>
+<body>
+<!-- ESTRUTURA DA PÁGINA (ticket 1): título, menu de ferramentas, botões, mensagem, imagem e painel. -->
+<header>
+  <h1>aestheticarium</h1>
+  <p>Protótipo do núcleo, dos plugins e do dither</p>
+</header>
+<nav id="menu"></nav>
+<div class="barra">
+  <label class="botao" for="campoImagem">Abrir imagem</label>
+  <label class="botao" for="campoPlugin">Escolher plugin</label>
+  <button id="btnExportar">Exportar PNG</button>
+</div>
+<!-- Campos de arquivo escondidos: os labels acima (atributo for) é que os acionam. -->
+<input type="file" id="campoImagem" accept="image/*" class="oculto">
+<input type="file" id="campoPlugin" class="oculto">
+<progress id="progresso" max="100" value="0" hidden></progress>
+<p id="status" role="status">Abra uma imagem para começar.</p>
+<canvas id="tela" width="1" height="1"></canvas>
+<section id="painel"></section>
+
+<script>
+// ================= 1. ESTADO: o que o programa precisa lembrar =================
+const VERSAO_API = 1;   // versão das regras que os plugins seguem
+const LADO_MAX = 600;   // a prévia usa a imagem reduzida a no máximo 600 pixels (fica rápida)
+const LADO_EXPORTAR = 3000; // a exportação usa até 3000 pixels de lado (limite para não faltar memória no celular)
+const FAIXA = 128;      // quantas linhas são processadas por vez na exportação
+const estado = {
+  itens: [],        // lista de plugins: { plugin, erro }
+  ativo: null,      // item selecionado no menu
+  original: null,   // pixels da imagem (já reduzida)
+  valores: {},      // valores atuais dos controles do plugin ativo
+  agendado: false,  // evita refazer a conta mais de uma vez por quadro
+  fonte: null,      // a imagem em tamanho total (usada na exportação)
+  exportando: false, // impede duas exportações ao mesmo tempo
+  abertos: {}       // seções recolhíveis do painel: quais estão abertas
+};
+const tela = document.getElementById("tela");
+const dizer = (texto) => { document.getElementById("status").textContent = texto; }; // mostra uma mensagem
+
+// ================= 2. CARREGADOR DE PLUGINS (ticket 2) =================
+// Todo plugin se cadastra chamando registrarPlugin. Se algo estiver errado,
+// ele aparece DESATIVADO no menu, com a mensagem do erro, e o resto continua funcionando.
+function registrarPlugin(p) {
+  try {
+    if (!p || typeof p.id !== "string" || typeof p.processar !== "function")
+      throw new Error("plugin incompleto: faltam id ou processar");
+    if (p.api !== VERSAO_API)
+      throw new Error("usa a API " + p.api + ", mas o app usa a " + VERSAO_API);
+    estado.itens.push({ plugin: p, erro: null });
+  } catch (e) {
+    estado.itens.push({ plugin: { id: "erro" + estado.itens.length, nome: (p && p.nome) || "Plugin sem nome" }, erro: e.message });
+  }
+  desenharMenu();
+}
+
+// Redesenha os botões do menu, um por plugin.
+function desenharMenu() {
+  const menu = document.getElementById("menu");
+  menu.innerHTML = "";
+  for (const item of estado.itens) {
+    const b = document.createElement("button");
+    b.textContent = item.plugin.nome;
+    if (item.erro) {
+      b.className = "desativado";
+      b.onclick = () => dizer("Desativado: " + item.erro);
+    } else {
+      b.className = estado.ativo === item ? "ativo" : "";
+      b.onclick = () => selecionar(item);
+    }
+    menu.appendChild(b);
+  }
+}
+
+// Escolhe um plugin: guarda os valores iniciais dos controles e mostra o painel.
+function selecionar(item) {
+  estado.ativo = item;
+  estado.valores = {};
+  for (const c of item.plugin.controles || []) if (c.tipo !== "botao") estado.valores[c.id] = typeof c.valor === "object" ? JSON.parse(JSON.stringify(c.valor)) : c.valor;
+  desenharMenu(); desenharPainel(); agendar();
+  dizer(item.plugin.nome + " ativo.");
+}
+
+// ================= PEÇAS COMPARTILHADAS (usadas pelo painel e pelos plugins) =================
+// Converte "#rrggbb" em [vermelho, verde, azul], cada um de 0 a 255.
+function hexParaRgb(hex) {
+  return [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
+}
+// Cor de um gradiente na posição t (0 a 1). paradas: lista de { pos: 0 a 1, cor: "#rrggbb" }.
+function corNoGradiente(paradas, t) {
+  const ps = paradas.slice().sort((a, b) => a.pos - b.pos);        // em ordem, da esquerda para a direita
+  if (t <= ps[0].pos) return hexParaRgb(ps[0].cor);
+  for (let i = 1; i < ps.length; i++) {
+    if (t <= ps[i].pos) {                                           // t está entre a parada i-1 e a i
+      const a = hexParaRgb(ps[i - 1].cor), b = hexParaRgb(ps[i].cor);
+      const k = (t - ps[i - 1].pos) / ((ps[i].pos - ps[i - 1].pos) || 1);   // 0 a 1 entre as duas cores
+      return [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
+    }
+  }
+  return hexParaRgb(ps[ps.length - 1].cor);
+}
+
+// ================= 3. PAINEL DECLARATIVO (tickets 3 e 23) =================
+// O plugin só DESCREVE os controles; quem desenha é o núcleo. Tipos: slider, menu, cor e botao.
+// Campos opcionais de cada controle:
+//   grupo:     nome de uma seção recolhível (controles com o mesmo grupo ficam juntos)
+//   mostrarSe: função que recebe os valores e diz se o controle aparece (true) ou some (false)
+function desenharPainel() {
+  const painel = document.getElementById("painel");
+  painel.innerHTML = "";
+  const plugin = estado.ativo.plugin;
+  const secoes = {};                                    // nome do grupo -> caixa recolhível
+  for (const c of plugin.controles || []) {
+    if (c.mostrarSe && !c.mostrarSe(estado.valores)) continue;   // controle escondido agora
+    let destino = painel;                               // sem grupo: vai direto no painel
+    if (c.grupo) {
+      if (!secoes[c.grupo]) secoes[c.grupo] = criarSecao(plugin.id + c.grupo, c.grupo, painel);
+      destino = secoes[c.grupo];
+    }
+    destino.appendChild(criarControle(c));
+  }
+}
+
+// Cria uma seção recolhível (details e summary) e lembra se ela estava aberta.
+function criarSecao(chave, titulo, painel) {
+  const caixa = document.createElement("details");
+  caixa.open = estado.abertos[chave] !== false;         // começa aberta
+  caixa.ontoggle = () => { estado.abertos[chave] = caixa.open; };
+  const sumario = document.createElement("summary");
+  sumario.textContent = titulo;
+  caixa.appendChild(sumario);
+  painel.appendChild(caixa);
+  return caixa;
+}
+
+// Cria uma linha do painel de acordo com o tipo do controle.
+function criarControle(c) {
+  const linha = document.createElement("div");
+  linha.className = "linha";
+  const v = estado.valores;
+  if (c.tipo === "botao") {
+    const b = document.createElement("button");
+    b.textContent = c.rotulo;
+    b.onclick = () => { if (c.aoClicar) c.aoClicar(v); desenharPainel(); agendar(); };
+    linha.appendChild(b);
+    return linha;
+  }
+  const rotulo = document.createElement("span");
+  rotulo.textContent = c.rotulo + (c.tipo === "slider" ? ": " + v[c.id] : "");
+  let campo;
+  if (c.tipo === "slider") {
+    campo = document.createElement("input");
+    campo.type = "range"; campo.min = c.min; campo.max = c.max; campo.value = v[c.id];
+    campo.oninput = () => { v[c.id] = Number(campo.value); rotulo.textContent = c.rotulo + ": " + campo.value; agendar(); };
+  } else if (c.tipo === "gradiente") {
+    campo = criarBarraGradiente(c, v);                  // barra de cores (ticket 31)
+  } else if (c.tipo === "cor") {
+    campo = document.createElement("input");
+    campo.type = "color"; campo.value = v[c.id];        // abre o seletor de cor do aparelho
+    campo.oninput = () => { v[c.id] = campo.value; agendar(); };
+  } else {                                              // menu
+    campo = document.createElement("select");
+    for (const o of c.opcoes) { const op = document.createElement("option"); op.value = o; op.textContent = o; campo.appendChild(op); }
+    campo.value = v[c.id];
+    // Ao trocar o menu, redesenhamos o painel: outros controles podem aparecer ou sumir.
+    campo.onchange = () => { v[c.id] = campo.value; desenharPainel(); agendar(); };
+  }
+  linha.append(rotulo, campo);
+  return linha;
+}
+
+// ================= BARRA DE GRADIENTE (ticket 31) =================
+// Controle "gradiente": uma barra com cores em posições. Tocar no fundo adiciona uma cor,
+// arrastar uma bolinha move a cor, e o seletor abaixo troca a cor da bolinha escolhida.
+// O valor guardado em v[c.id] é a lista de paradas: { pos: 0 a 1, cor: "#rrggbb" }.
+function criarBarraGradiente(c, v) {
+  const caixa = document.createElement("div");
+  const barra = document.createElement("div");
+  barra.className = "barra-grad";
+  const linha = document.createElement("div");
+  linha.className = "barra";
+  const seletor = document.createElement("input"); seletor.type = "color";
+  const remover = document.createElement("button"); remover.textContent = "Remover cor";
+  linha.append(seletor, remover);
+  caixa.append(barra, linha);
+  let sel = 0;                                         // qual bolinha está escolhida
+  const paradas = () => v[c.id];
+  // Posição do dedo na barra, de 0 (esquerda) a 1 (direita).
+  const posicao = (e) => {
+    const r = barra.getBoundingClientRect();
+    return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+  };
+  function pintarFundo() {                             // desenha as cores da barra
+    const ps = paradas().slice().sort((a, b) => a.pos - b.pos);
+    barra.style.background = "linear-gradient(to right," + ps.map((p) => p.cor + " " + p.pos * 100 + "%").join(",") + ")";
+  }
+  function desenhar() {                                // recria as bolinhas
+    pintarFundo();
+    barra.innerHTML = "";
+    paradas().forEach((p, i) => {
+      const alca = document.createElement("div");
+      alca.className = "alca" + (i === sel ? " sel" : "");
+      alca.style.left = p.pos * 100 + "%"; alca.style.background = p.cor;
+      alca.onpointerdown = (e) => {                    // começou a arrastar esta bolinha
+        e.stopPropagation(); sel = i;
+        alca.setPointerCapture(e.pointerId);           // continua recebendo o movimento mesmo fora dela
+        for (const o of barra.children) o.classList.remove("sel");
+        alca.classList.add("sel"); seletor.value = p.cor; remover.disabled = paradas().length <= 2;
+        alca.onpointermove = (m) => { p.pos = posicao(m); alca.style.left = p.pos * 100 + "%"; pintarFundo(); agendar(); };
+      };
+      alca.onpointerup = () => { alca.onpointermove = null; };
+      barra.appendChild(alca);
+    });
+    seletor.value = paradas()[sel].cor;
+    remover.disabled = paradas().length <= 2;         // sempre sobram pelo menos duas cores
+  }
+  barra.onpointerdown = (e) => {                       // toque no fundo: adiciona uma cor ali
+    const pos = posicao(e);
+    const cor = corNoGradiente(paradas(), pos).map((n) => Math.round(n).toString(16).padStart(2, "0")).join("");
+    paradas().push({ pos, cor: "#" + cor });
+    sel = paradas().length - 1; desenhar(); agendar();
+  };
+  seletor.oninput = () => { paradas()[sel].cor = seletor.value; desenhar(); agendar(); };
+  remover.onclick = () => { paradas().splice(sel, 1); sel = 0; desenhar(); agendar(); };
+  desenhar();
+  return caixa;
+}
+
+// ================= 4. IMAGEM E PRÉVIA AO VIVO (tickets 4 e 5) =================
+// agendar: junta vários pedidos seguidos em um só por quadro de tela, para a interface não travar.
+function agendar() {
+  if (estado.agendado) return;
+  estado.agendado = true;
+  requestAnimationFrame(() => { estado.agendado = false; aplicar(); });
+}
+
+// aplicar: entrega uma CÓPIA da imagem ao plugin e desenha o resultado.
+// A original nunca é alterada, então dá para mexer nos controles quantas vezes quiser.
+function aplicar() {
+  const o = estado.original;
+  if (!o) return;
+  let saida = o;
+  if (estado.ativo) {
+    try {
+      const copia = new ImageData(new Uint8ClampedArray(o.data), o.width, o.height);
+      saida = estado.ativo.plugin.processar(copia, estado.valores) || copia;
+    } catch (e) {                              // plugin com defeito: desativa e segue em frente
+      estado.ativo.erro = e.message;
+      estado.ativo = null;
+      desenharMenu();
+      document.getElementById("painel").innerHTML = "";
+      dizer("Plugin desativado por erro: " + e.message);
+    }
+  }
+  tela.getContext("2d").putImageData(saida, 0, 0);
+}
+
+// Abre uma imagem: lê o arquivo, reduz para a prévia e guarda os pixels.
+function abrirImagem(arquivo) {
+  const leitor = new FileReader();
+  leitor.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      const escala = Math.min(1, LADO_MAX / Math.max(img.width, img.height));
+      const w = Math.round(img.width * escala), h = Math.round(img.height * escala);
+      tela.width = w; tela.height = h;
+      const ctx = tela.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(img, 0, 0, w, h);
+      estado.original = ctx.getImageData(0, 0, w, h);   // pixels: vermelho, verde, azul, transparência
+      estado.fonte = img;                               // guarda a imagem inteira para exportar depois
+      aplicar();
+      dizer("Imagem aberta (prévia de " + w + " por " + h + " pixels).");
+    };
+    img.onerror = () => dizer("Não foi possível abrir este arquivo como imagem.");
+    img.src = leitor.result;
+  };
+  leitor.readAsDataURL(arquivo);
+}
+
+// ================= 6. EXPORTAR EM TAMANHO TOTAL (ticket 6) =================
+// Processa a imagem em tamanho total e oferece o arquivo PNG para salvar.
+// O trabalho é feito em FAIXAS de linhas e, entre uma faixa e outra, devolvemos o controle
+// ao navegador: assim a interface continua respondendo e a barra de progresso avança.
+async function exportar() {
+  if (!estado.fonte) return dizer("Abra uma imagem antes de exportar.");
+  if (estado.exportando) return;                 // já existe uma exportação em andamento
+  estado.exportando = true;
+  const barra = document.getElementById("progresso");
+  barra.value = 0; barra.hidden = false;
+  try {
+    // 1) Desenha a imagem original em tamanho total (até LADO_EXPORTAR).
+    const f = estado.fonte;
+    const escala = Math.min(1, LADO_EXPORTAR / Math.max(f.width, f.height));
+    const w = Math.round(f.width * escala), h = Math.round(f.height * escala);
+    const folha = document.createElement("canvas");   // tela invisível só para esta conta
+    folha.width = w; folha.height = h;
+    const ctx = folha.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(f, 0, 0, w, h);
+    // 2) Aplica o plugin ativo, com uma cópia dos valores atuais dos controles.
+    const p = estado.ativo && estado.ativo.plugin;
+    const valores = Object.assign({}, estado.valores);
+    // porFaixas pode ser verdadeiro/falso ou uma função que decide conforme os valores escolhidos.
+    const emFaixas = p && (typeof p.porFaixas === "function" ? p.porFaixas(valores) : p.porFaixas);
+    if (emFaixas) {
+      for (let y = 0; y < h; y += FAIXA) {
+        const alt = Math.min(FAIXA, h - y);           // a última faixa pode ser menor
+        const faixa = ctx.getImageData(0, y, w, alt);
+        ctx.putImageData(p.processar(faixa, valores, y, h) || faixa, 0, y);
+        barra.value = Math.round(((y + alt) / h) * 100);
+        await new Promise((r) => setTimeout(r, 0));   // respiro para a interface
+      }
+    } else if (p) {
+      dizer("Processando a imagem inteira (este plugin não trabalha em faixas)...");
+      await new Promise((r) => setTimeout(r, 30));
+      const tudo = ctx.getImageData(0, 0, w, h);
+      ctx.putImageData(p.processar(tudo, valores) || tudo, 0, 0);
+    }
+    barra.value = 100;
+    // 3) Transforma em PNG e pede ao ambiente para oferecer o arquivo (o usuário confirma).
+    const arquivo = await new Promise((r) => folha.toBlob(r, "image/png"));
+    if (!arquivo) throw new Error("não foi possível gerar o PNG");
+    if (window.claude) {                            // dentro do Claude: o ambiente oferece o arquivo
+      const baixas = await window.claude.use("downloads");
+      await baixas.save({ filename: "aestheticarium.png", data: arquivo });
+    } else {                                        // fora do Claude (app instalado): download comum do navegador
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(arquivo); a.download = "aestheticarium.png"; a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    }
+    dizer("Exportado: " + w + " por " + h + " pixels.");
+  } catch (e) {
+    dizer(e && e.code === "declined" ? "Exportação cancelada." : "Falha ao exportar: " + ((e && e.message) || e));
+  } finally {                                     // roda sempre, com ou sem erro
+    estado.exportando = false;
+    setTimeout(() => { barra.hidden = true; }, 800);
+  }
+}
+
+// Carrega um plugin de um arquivo .js escolhido pelo usuário.
+// O arquivo recebe o objeto "aestheticarium" e chama aestheticarium.registrarPlugin(...).
+function carregarPlugin(arquivo) {
+  const leitor = new FileReader();
+  leitor.onload = () => {
+    try {
+      new Function("aestheticarium", leitor.result)({ registrarPlugin });
+      dizer("Plugin carregado: " + arquivo.name);
+    } catch (e) {
+      dizer("Não foi possível carregar " + arquivo.name + ": " + e.message + " (este ambiente pode bloquear plugins de arquivo).");
+    }
+  };
+  leitor.readAsText(arquivo);
+}
+
+// Quando o usuário escolhe um arquivo, o campo avisa (onchange) e chamamos a função certa.
+document.getElementById("btnExportar").onclick = exportar;
+document.getElementById("campoImagem").onchange = (e) => { if (e.target.files[0]) abrirImagem(e.target.files[0]); };
+document.getElementById("campoPlugin").onchange = (e) => { if (e.target.files[0]) carregarPlugin(e.target.files[0]); };
+
+// ================= 5. PLUGINS INCLUÍDOS =================
+// Eles usam o MESMO registrarPlugin que um arquivo externo usaria.
+
+// ---- Peças do Dither ----
+// Matriz de Bayer de lado n (2, 4 ou 8): números de 0 a n*n-1 que formam o padrão do dither ordenado.
+// Cada matriz maior é montada a partir da anterior (por isso a função chama a si mesma).
+const cacheBayer = {};
+function matrizBayer(n) {
+  if (cacheBayer[n]) return cacheBayer[n];
+  if (n === 2) return (cacheBayer[2] = [0, 2, 3, 1]);
+  const m = matrizBayer(n / 2), t = n / 2, saida = [];
+  for (let y = 0; y < n; y++) {
+    for (let x = 0; x < n; x++) {
+      const quadrante = (y >= t ? 2 : 0) + (x >= t ? 1 : 0);        // qual dos 4 cantos
+      saida[y * n + x] = 4 * m[(y % t) * t + (x % t)] + [0, 2, 3, 1][quadrante];
+    }
+  }
+  return (cacheBayer[n] = saida);
+}
+// Ruído "aleatório" que sempre dá o mesmo valor para a mesma posição (prévia e exportação ficam iguais).
+const ruido = (x, y) => { const r = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453; return r - Math.floor(r); };
+// Difusão de erro: para cada vizinho, [deslocamento em x, deslocamento em y, parte do erro que ele recebe].
+const DIFUSAO = {
+  "Floyd-Steinberg": [[1, 0, 7 / 16], [-1, 1, 3 / 16], [0, 1, 5 / 16], [1, 1, 1 / 16]],
+  "Atkinson": [[1, 0, 1 / 8], [2, 0, 1 / 8], [-1, 1, 1 / 8], [0, 1, 1 / 8], [1, 1, 1 / 8], [0, 2, 1 / 8]]
+};
+// Deslocamento do limiar (de -0.5 a 0.5) para Bayer e ruído; ele "empurra" o pixel para cima ou para baixo.
+function limiarOrdenado(v, x, y) {
+  const f = v.forca / 100;
+  if (v.algoritmo.startsWith("Bayer")) {
+    const n = Number(v.algoritmo.slice(6, 7));                       // "Bayer 4×4" vira 4
+    return ((matrizBayer(n)[(y % n) * n + (x % n)] + 0.5) / (n * n) - 0.5) * f;
+  }
+  return (ruido(x, y) - 0.5) * f;                                    // ruído aleatório
+}
+
+// O dither (algoritmo, níveis...) só é usado fora do mapa de gradiente, ou no mapa com estilo "Com dither".
+function usaDither(v) { return v.modo !== "Mapa de gradiente" || v.estilo === "Com dither"; }
+
+// ---- O plugin Dither ----
+// Modos: Cinza e Colorido (níveis por canal) e Mapa de gradiente (cores tiradas da barra).
+registrarPlugin({
+  api: 1, id: "dither", nome: "Dither",
+  controles: [
+    { id: "modo", grupo: "Algoritmo", tipo: "menu", rotulo: "Modo", opcoes: ["Cinza", "Colorido", "Mapa de gradiente"], valor: "Cinza" },
+    { id: "estilo", grupo: "Mapa de gradiente", tipo: "menu", rotulo: "Estilo", opcoes: ["Suave", "Com dither"], valor: "Suave",
+      mostrarSe: (v) => v.modo === "Mapa de gradiente" },
+    { id: "gradiente", grupo: "Mapa de gradiente", tipo: "gradiente", rotulo: "Cores (do escuro, à esquerda, ao claro, à direita)",
+      valor: [{ pos: 0, cor: "#0b1030" }, { pos: 0.5, cor: "#c2185b" }, { pos: 1, cor: "#ffe08a" }],
+      mostrarSe: (v) => v.modo === "Mapa de gradiente" },
+    { id: "algoritmo", grupo: "Algoritmo", tipo: "menu", rotulo: "Algoritmo", valor: "Bayer 4×4",
+      opcoes: ["Bayer 2×2", "Bayer 4×4", "Bayer 8×8", "Limiar simples", "Ruído aleatório", "Floyd-Steinberg", "Atkinson"],
+      mostrarSe: usaDither },
+    { id: "niveis", grupo: "Algoritmo", tipo: "slider", rotulo: "Níveis de cor", min: 2, max: 8, valor: 2,
+      mostrarSe: (v) => v.modo !== "Mapa de gradiente" && v.algoritmo !== "Limiar simples" },
+    { id: "ncores", grupo: "Algoritmo", tipo: "slider", rotulo: "Número de cores", min: 2, max: 8, valor: 4,
+      mostrarSe: (v) => v.modo === "Mapa de gradiente" && usaDither(v) && v.algoritmo !== "Limiar simples" },
+    { id: "forca", grupo: "Algoritmo", tipo: "slider", rotulo: "Intensidade", min: 0, max: 100, valor: 100,
+      mostrarSe: (v) => usaDither(v) && !DIFUSAO[v.algoritmo] && v.algoritmo !== "Limiar simples" },
+    { id: "limiar", grupo: "Algoritmo", tipo: "slider", rotulo: "Limiar", min: 0, max: 255, valor: 128,
+      mostrarSe: (v) => usaDither(v) && v.algoritmo === "Limiar simples" },
+    { id: "inverter", grupo: "Algoritmo", tipo: "botao", rotulo: "Inverter cores", aoClicar: (v) => { v.inverter = !v.inverter; } }
+  ],
+  // Na exportação, só pode ser em faixas o que não depende dos vizinhos (a difusão de erro depende).
+  porFaixas: (v) => !usaDither(v) || !DIFUSAO[v.algoritmo],
+  processar(img, v, y0 = 0) {
+    const d = img.data, w = img.width, h = img.height;
+    const mapa = v.modo === "Mapa de gradiente";
+    const cinza = v.modo !== "Colorido";                             // Cinza e Mapa trabalham com o brilho
+    // Mapa suave: sem dither. O brilho vira cor direto, por uma tabela de 256 cores (feita uma vez só).
+    if (mapa && !usaDither(v)) {
+      const tabela = [];
+      for (let b = 0; b < 256; b++) tabela.push(corNoGradiente(v.gradiente, v.inverter ? 1 - b / 255 : b / 255));
+      for (let i = 0; i < d.length; i += 4) {
+        const cor = tabela[Math.round(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2])];
+        d[i] = cor[0]; d[i + 1] = cor[1]; d[i + 2] = cor[2];
+      }
+      return img;
+    }
+    const nc = cinza ? 1 : 3;                                        // canais calculados: 1 (brilho) ou 3 (R, G, B)
+    const niveis = v.algoritmo === "Limiar simples" ? 2 : (mapa ? v.ncores : v.niveis);
+    const passo = 255 / (niveis - 1);                                // distância entre dois níveis
+    const arredondar = (val) => Math.min(255, Math.max(0, Math.round(val / passo) * passo));
+    const difusao = DIFUSAO[v.algoritmo];
+    // No mapa com dither, cada nível de brilho (0, 1, 2...) ganha uma cor da barra.
+    const paleta = mapa ? Array.from({ length: niveis }, (_, k) => corNoGradiente(v.gradiente, k / (niveis - 1))) : null;
+    // 1) Valores de partida em decimais (a difusão de erro precisa de casas decimais).
+    const buf = new Float32Array(w * h * nc);
+    for (let i = 0, j = 0; i < d.length; i += 4, j += nc) {
+      for (let c = 0; c < nc; c++) {
+        const val = cinza ? 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2] : d[i + c];
+        buf[j + c] = v.inverter ? 255 - val : val;
+      }
+    }
+    // 2) Pixel por pixel: decide o valor final e escreve na imagem.
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const j = (y * w + x) * nc, i = (y * w + x) * 4;
+        for (let c = 0; c < nc; c++) {
+          const velho = buf[j + c];
+          let novo;
+          if (difusao) {                                             // difusão de erro
+            novo = arredondar(velho);
+            const erro = velho - novo;
+            for (const [dx, dy, peso] of difusao) {                  // reparte o erro entre os vizinhos
+              const xx = x + dx, yy = y + dy;
+              if (xx >= 0 && xx < w && yy < h) buf[(yy * w + xx) * nc + c] += erro * peso;
+            }
+          } else if (v.algoritmo === "Limiar simples") {
+            novo = velho >= v.limiar ? 255 : 0;
+          } else {                                                   // Bayer ou ruído
+            novo = arredondar(velho + limiarOrdenado(v, x, y + y0) * passo);
+          }
+          buf[j + c] = novo;
+        }
+        if (mapa) {                                                  // nível de brilho vira cor da barra
+          const cor = paleta[Math.round(buf[j] / passo)];
+          d[i] = cor[0]; d[i + 1] = cor[1]; d[i + 2] = cor[2];
+        } else {
+          for (let c = 0; c < 3; c++) d[i + c] = buf[j + (nc === 1 ? 0 : c)];
+        }
+      }
+    }
+    return img;
+  }
+});
+
+// Plugin de teste com versão de API errada: deve aparecer desativado no menu.
+registrarPlugin({ api: 99, id: "futuro", nome: "Plugin de teste", processar() {} });
+
+selecionar(estado.itens[0]);   // começa com o Dither ativo
+
+// PWA: registra o "service worker", o arquivo que guarda o app no aparelho para abrir sem internet.
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js");
+</script>
+</body>
+</html>
